@@ -1,0 +1,1634 @@
+<<<<<<< HEAD
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
+using System.Xml;
+using System.IO;
+using Microsoft.SqlServer.Dac.CodeAnalysis;
+using Microsoft.SqlServer.Dac.Model;
+using Microsoft.SqlServer.Dac.Extensions;
+
+namespace TSQLSmellSCA
+{
+
+    class VarAssignment
+    {
+        public string VarName;
+        public string SrcName;
+
+    }
+    public class Smells
+    {
+        List<VarAssignment> AssignmentList = new List<VarAssignment>();
+        IList<ProcedureParameter> ParameterList;
+        List<SqlRuleProblem> _problems = null;
+
+        int _iRule;
+        TSqlObject _modelElement;
+        public bool NoCountSet = false;
+        
+
+        static string GetType(TSqlFragment Statement)
+        {
+            String Type = Statement.ToString();
+            String[] TypeSplit = Type.Split('.');
+            String StmtType = TypeSplit[TypeSplit.Length - 1];
+            return (StmtType);
+        }
+
+        void SendFeedBack(int ErrorNum, TSqlFragment ErrorFrg)
+        {
+            if (ErrorNum != _iRule) return;
+
+            
+            System.Resources.ResourceManager rm = Resources.ResourceManager;
+
+            string Lookup = "TSQLSmell_RuleName" + ErrorNum.ToString("D2");
+            string Out = rm.GetString(Lookup);
+            
+            _problems.Add(new SqlRuleProblem(Out, _modelElement, ErrorFrg));
+            return;
+
+
+        }
+        //void SendFeedBack(int ErrorNum, TSqlParserToken ErrorToken)
+        //{
+           // Console.WriteLine(ErrorNum.ToString());
+            // TODO : For future, may need offset from following token
+        //}
+
+
+
+
+        void ProcessCreateTable(CreateTableStatement TblStmt)
+        {
+            if (TblStmt.SchemaObjectName.SchemaIdentifier == null && 
+                !TblStmt.SchemaObjectName.BaseIdentifier.Value.StartsWith("#") &&
+                !TblStmt.SchemaObjectName.BaseIdentifier.Value.StartsWith("@")
+                )
+            {
+                SendFeedBack(27, TblStmt);
+            }
+        }
+        void TestProcedureReference(ProcedureReference PrcRef)
+        {
+            if (PrcRef.Name.SchemaIdentifier == null)
+            {
+                SendFeedBack(24, PrcRef);
+            }
+        }
+        void TestViewReference(SchemaObjectName ObjectName)
+        {
+            if (ObjectName.SchemaIdentifier == null)
+            {
+                SendFeedBack(24, ObjectName);
+            }
+        }
+        bool isCteName(SchemaObjectName ObjectName, WithCtesAndXmlNamespaces cte)
+        {
+            if (cte == null) return false;
+            foreach (CommonTableExpression Expression in cte.CommonTableExpressions)
+            {
+                if (Expression.ExpressionName.Value == ObjectName.BaseIdentifier.Value)
+                {
+                    return true;
+                }
+
+            }
+            return false;
+        }
+        void ProcessTableReference(TableReference TableRef, WithCtesAndXmlNamespaces cte)
+        {
+            string Type = GetType(TableRef);
+            switch (Type)
+            {
+                case "NamedTableReference":
+                    NamedTableReference NamedTableRef = (NamedTableReference)TableRef;
+                    if (NamedTableRef.SchemaObject.BaseIdentifier.Value[0] != '#' &&
+                        NamedTableRef.SchemaObject.BaseIdentifier.Value[0] != '@')
+                    {
+                        if (NamedTableRef.SchemaObject.ServerIdentifier != null)
+                        {
+                            SendFeedBack(1, NamedTableRef);
+                        }
+                        if (NamedTableRef.SchemaObject.SchemaIdentifier == null &&
+                            !isCteName(NamedTableRef.SchemaObject, cte))
+                        {
+                            SendFeedBack(2, NamedTableRef);
+                        }
+                    }
+                    if (NamedTableRef.TableHints != null)
+                    {
+                        foreach (TableHint TableHint in NamedTableRef.TableHints)
+                        {
+                            switch (TableHint.HintKind)
+                            {
+                                case TableHintKind.NoLock:
+                                    SendFeedBack(3, TableHint);
+                                    break;
+                                case TableHintKind.ReadPast:
+                                    break;
+                                case TableHintKind.ForceScan:
+                                    SendFeedBack(44, TableHint);
+                                    break;
+                                case TableHintKind.Index:
+                                    SendFeedBack(45, TableHint);
+                                    break;
+                                default:
+                                    SendFeedBack(4, TableHint);
+                                    break;
+
+                            }
+                        }
+                    }
+                    break;
+                case "QueryDerivedTable":
+
+                    QueryDerivedTable QueryDerivedRef = (QueryDerivedTable)TableRef;
+                    String Alias = QueryDerivedRef.Alias.Value;
+                    if (Alias.Length == 1)
+                    {
+                        SendFeedBack(11, QueryDerivedRef);
+                    }
+                    if (GetType(QueryDerivedRef.QueryExpression) == "QuerySpecification")
+                    {
+                        //    QuerySpecification QuerySpec = (QuerySpecification)QueryDerivedRef.QueryExpression;
+                        //  ProcessFromClause(QuerySpec.FromClause, cte);
+                        ProcessQueryExpression(QueryDerivedRef.QueryExpression, "RG", true, cte);
+                    }
+                    else
+                    {
+
+
+                    }
+                    break;
+                case "QualifiedJoin":
+                    QualifiedJoin QualifiedJoin = (QualifiedJoin)TableRef;
+                    ProcessTableReference(QualifiedJoin.FirstTableReference, cte);
+                    ProcessTableReference(QualifiedJoin.SecondTableReference, cte);
+                    break;
+            }
+        }
+        void ProcessFromClause(FromClause FromClause, WithCtesAndXmlNamespaces cte)
+        {
+            foreach (TableReference TableRef in FromClause.TableReferences)
+            {
+                ProcessTableReference(TableRef, cte);
+            }
+        }
+
+        void ProcessFunctionCall(FunctionCall FunctionCall)
+        {
+
+            if (FunctionCall.OverClause != null)
+            {
+                if (FunctionCall.OverClause.WindowFrameClause != null)
+                {
+                    if (FunctionCall.OverClause.WindowFrameClause.WindowFrameType == WindowFrameType.Range)
+                    {
+                        SendFeedBack(25, FunctionCall.OverClause.WindowFrameClause);
+                        return;
+
+                    }
+                }
+                else
+                {
+                    if (FunctionCall.OverClause.OrderByClause != null)
+                    {
+                        switch (FunctionCall.FunctionName.Value.ToLower())
+                        {
+                            case "row_number":
+                            case "rank":
+                            case "dense_rank":
+                            case "ntile":
+                            case "lag":
+                            case "lead":
+                                break;
+                            default:
+                                SendFeedBack(26, FunctionCall.OverClause);
+                                break;
+                        }
+
+                    }
+                }
+            }
+
+        }
+
+        void ProcessVariableReference(VariableReference VarRef,string VarName){
+            VarAssignment VarAssignment = new VarAssignment();
+            VarAssignment.SrcName = VarRef.Name;
+            VarAssignment.VarName = VarName;
+            AssignmentList.Add(VarAssignment);
+
+        }
+        void ProcessSelectSetFragment(TSqlFragment Expression,string VarName)
+        {
+            string ElemType = GetType(Expression);
+            switch (ElemType)
+            {
+                case "BinaryExpression":
+                    BinaryExpression BinaryExpression = (BinaryExpression)Expression;
+                    ProcessSelectSetFragment(BinaryExpression.FirstExpression,VarName);
+                    ProcessSelectSetFragment(BinaryExpression.SecondExpression,VarName);
+                    break;
+                case "VariableReference":
+                     ProcessVariableReference((VariableReference)Expression, VarName);
+                    break;
+                case "FunctionCall":
+                    FunctionCall Func = (FunctionCall)Expression;
+                    foreach(TSqlFragment Parameter in Func.Parameters){
+                        ProcessSelectSetFragment(Parameter,VarName);
+
+                    }
+                    break;
+                case "CastCall":
+                    CastCall Cast = (CastCall)Expression;
+                    if (GetType(Cast.Parameter) == "VariableReference")
+                    {
+                        ProcessVariableReference((VariableReference)Cast.Parameter, VarName);
+                    }
+                    break;
+                case "StringLiteral":
+                    break;
+
+               
+
+
+            }
+
+        }
+        void ProcessSelectSetVariable(SelectSetVariable SelectElement)
+        {
+            string VarName = SelectElement.Variable.Name;
+            ScalarExpression Expression = SelectElement.Expression;
+            ProcessSelectSetFragment(Expression,VarName);
+
+        }
+        void ProcessSelectElement(SelectElement SelectElement, string ParentType, WithCtesAndXmlNamespaces Cte)
+        {
+            string ElemType = GetType(SelectElement);
+            switch (ElemType)
+            {
+                case "SelectStarExpression":
+                    SendFeedBack(5, SelectElement);
+                    break;
+                case "SelectScalarExpression":
+
+                    SelectScalarExpression ScalarExpression = (SelectScalarExpression)SelectElement;
+                    string ExpressionType = GetType(ScalarExpression.Expression);
+                    switch (ExpressionType)
+                    {
+                        case "ScalarSubquery":
+                            ScalarSubquery SubQuery = (ScalarSubquery)ScalarExpression.Expression;
+                            ProcessQueryExpression(SubQuery.QueryExpression, ParentType, false, Cte);
+                            break;
+                        case "ColumnReferenceExpression":
+                            ColumnReferenceExpression Expression = (ColumnReferenceExpression)ScalarExpression.Expression;
+                            break;
+                        case "FunctionCall":
+                            ProcessFunctionCall((FunctionCall)ScalarExpression.Expression);
+                            break;
+                        case "IntegerLiteral":
+                            break;
+                        case "ConvertCall":
+                            break;
+
+                    }
+                    break;
+                case "SelectSetVariable":
+                    ProcessSelectSetVariable((SelectSetVariable)SelectElement);
+                    break;
+
+            }
+        }
+        void ProcessSelectElements(IList<SelectElement> SelectElements, string ParentType, WithCtesAndXmlNamespaces Cte)
+        {
+            foreach (SelectElement SelectElement in SelectElements)
+            {
+                ProcessSelectElement(SelectElement, ParentType, Cte);
+            }
+        }
+
+        void ProcessWhereBooleanExpression(BooleanExpression BooleanExpression)
+        {
+
+            string ExpressionType = GetType(BooleanExpression);
+            switch (ExpressionType)
+            {
+                case "BooleanComparisonExpression":
+                    BooleanComparisonExpression BoolComp = (BooleanComparisonExpression)BooleanExpression;
+                    ProcessWhereScalarExpression(BoolComp.FirstExpression);
+                    ProcessWhereScalarExpression(BoolComp.SecondExpression);
+
+                    break;
+                case "BooleanBinaryExpression":
+                    BooleanBinaryExpression BoolExpression = (BooleanBinaryExpression)BooleanExpression;
+                    ProcessWhereBooleanExpression(BoolExpression.FirstExpression);
+                    ProcessWhereBooleanExpression(BoolExpression.SecondExpression);
+                    break;
+                default:
+                    break;
+            }
+
+        }
+        void ProcessWhereScalarExpression(ScalarExpression WhereExpression)
+        {
+            string ExpressionType = GetType(WhereExpression);
+            String ParameterType;
+            switch (ExpressionType)
+            {
+                case "ConvertCall":
+                    ConvertCall ConvertCall = (ConvertCall)WhereExpression;
+                    ParameterType = GetType(ConvertCall.Parameter);
+                    if (ParameterType == "ColumnReferenceExpression")
+                    {
+
+                        SendFeedBack(6, ConvertCall);
+                    }
+                    break;
+                case "CastCall":
+                    CastCall CastCall = (CastCall)WhereExpression;
+                    ParameterType = GetType(CastCall.Parameter);
+                    if (ParameterType == "ColumnReferenceExpression")
+                    {
+
+                        SendFeedBack(6, CastCall);
+                    }
+                    break;
+                case "ScalarSubquery":
+                    ScalarSubquery SubQuery = (ScalarSubquery)WhereExpression;
+                    ProcessQueryExpression(SubQuery.QueryExpression, "RG");
+                    break;
+
+            }
+
+        }
+        void ProcessWhereClause(WhereClause WhereClause)
+        {
+            if (WhereClause == null) return;
+            if (WhereClause.SearchCondition != null) ProcessWhereBooleanExpression(WhereClause.SearchCondition);
+
+
+        }
+
+        void ProcessOrderExpression(ExpressionWithSortOrder Expression)
+        {
+            string SubExpressionType = GetType(Expression.Expression);
+            switch (SubExpressionType)
+            {
+                case "IntegerLiteral":
+                    SendFeedBack(7, Expression);
+                    break;
+                case "CastCall":
+                    CastCall CastCall = (CastCall)Expression.Expression;
+                    if (GetType(CastCall.Parameter) == "ColumnReferenceExpression")
+                    {
+                        SendFeedBack(6, Expression);
+
+                    }
+                    break;
+
+            }
+
+
+        }
+        void ProcessOrderByClause(OrderByClause OrderClause)
+        {
+            if (OrderClause == null) return;
+            foreach (ExpressionWithSortOrder Expression in OrderClause.OrderByElements)
+            {
+                ProcessOrderExpression(Expression);
+            }
+
+
+        }
+        void ProcessQueryExpression(QueryExpression QueryExpression, string ParentType, bool TestTop = false, WithCtesAndXmlNamespaces Cte = null)
+        {
+            string ExpressionType = GetType(QueryExpression);
+            switch (ExpressionType)
+            {
+                case "QuerySpecification":
+                    //{$Query = $Stmt.QueryExpression;
+                    QuerySpecification QuerySpec = (QuerySpecification)QueryExpression;
+                    ProcessSelectElements(QuerySpec.SelectElements, ParentType, Cte);
+                    if (QuerySpec.FromClause != null) ProcessFromClause(QuerySpec.FromClause, Cte);
+                    if (QuerySpec.WhereClause != null) ProcessWhereClause(QuerySpec.WhereClause);
+                    if (QuerySpec.OrderByClause != null)
+                    {
+                        ProcessOrderByClause(QuerySpec.OrderByClause);
+                        if (ParentType == "VW")
+                        {
+                            SendFeedBack(28, QuerySpec.OrderByClause);
+                        }
+                    }
+                    if (QuerySpec.TopRowFilter != null) ProcessTopFilter(QuerySpec.TopRowFilter);
+
+                    break;
+                case "QueryParenthesisExpression":
+                    //{$Query=$Stmt.QueryExpression.QueryExpression;break}
+                    QueryParenthesisExpression Expression = (QueryParenthesisExpression)QueryExpression;
+                    ProcessQueryExpression(Expression.QueryExpression, "RG", TestTop, Cte);
+
+                    break;
+                case "BinaryQueryExpression":
+                    BinaryQueryExpression BinaryQueryExpression = (BinaryQueryExpression)QueryExpression;
+                    ProcessQueryExpression(BinaryQueryExpression.FirstQueryExpression, ParentType, TestTop, Cte);
+                    ProcessQueryExpression(BinaryQueryExpression.SecondQueryExpression, ParentType, TestTop, Cte);
+                    //BinaryQueryExpression.
+
+                    //{Process-BinaryQueryExpression $Stmt.QueryExpression;break;}
+                    break;
+            }
+        }
+
+        void ProcessWithCtesAndXmlNamespaces(WithCtesAndXmlNamespaces Cte)
+        {
+            foreach (CommonTableExpression Expression in Cte.CommonTableExpressions)
+            {
+                ProcessQueryExpression(Expression.QueryExpression, "RG", false, Cte);
+            }
+
+
+        }
+
+        void ProcessTopFilter(TopRowFilter TopFilter)
+        {
+            IntegerLiteral TopLiteral = null;
+            if (GetType(TopFilter.Expression) != "ParenthesisExpression")
+            {
+                SendFeedBack(34, TopFilter);
+                if (GetType(TopFilter.Expression) == "IntegerLiteral")
+                {
+                    TopLiteral = (IntegerLiteral)TopFilter.Expression;
+                }
+
+            }
+            else
+            {
+                ParenthesisExpression ParenthesisExpression = (ParenthesisExpression)TopFilter.Expression;
+                if (GetType(ParenthesisExpression.Expression) == "IntegerLiteral")
+                {
+                    TopLiteral = (IntegerLiteral)ParenthesisExpression.Expression;
+                }
+            }
+            if (TopFilter.Percent && TopLiteral != null && TopLiteral.Value == "100")
+            {
+                SendFeedBack(35, TopLiteral);
+            }
+
+        }
+
+        void ProcessHint(OptimizerHint Hint, SelectStatement SelStatement)
+        {
+            switch (Hint.HintKind)
+            {
+                case OptimizerHintKind.OrderGroup:
+                case OptimizerHintKind.MergeJoin:
+                case OptimizerHintKind.HashJoin:
+                case OptimizerHintKind.LoopJoin:
+                case OptimizerHintKind.ConcatUnion:
+                case OptimizerHintKind.HashUnion:
+                case OptimizerHintKind.MergeUnion:
+                case OptimizerHintKind.KeepUnion:
+                    SendFeedBack(4, SelStatement);
+                    break;
+            }
+
+        }
+
+
+        void ProcessOptimizerHints(IList<OptimizerHint> OptimizerHints, SelectStatement SelStatement)
+        {
+            /* OptimizerHints is not a decendant of TSQLFragment */
+            foreach (OptimizerHint Hint in OptimizerHints)
+            {
+                ProcessHint(Hint, SelStatement);
+            }
+
+        }
+
+        //void ProcessSelectElements(
+        void ProcessSelectStatement(SelectStatement SelStatement, string ParentType, bool TestTop = false, WithCtesAndXmlNamespaces Cte = null)
+        {
+            
+
+            if (Cte == null && SelStatement.WithCtesAndXmlNamespaces != null)
+            {
+                Cte = SelStatement.WithCtesAndXmlNamespaces;
+                if (Cte != null) ProcessWithCtesAndXmlNamespaces(Cte);
+            }
+            ProcessQueryExpression(SelStatement.QueryExpression, ParentType, false, Cte);
+            ProcessOptimizerHints(SelStatement.OptimizerHints, SelStatement);
+
+        }
+        void ProcessViewStatementBody(ViewStatementBody StatementBody)
+        {
+
+            TestViewReference(StatementBody.SchemaObjectName);
+            ProcessSelectStatement(StatementBody.SelectStatement, "VW", true);
+        }
+
+        void ProcessGeneralSetCommand(GeneralSetCommand SetCommand)
+        {
+            switch (SetCommand.CommandType)
+            {
+                case GeneralSetCommandType.DateFirst:
+                    SendFeedBack(9, SetCommand);
+                    break;
+                case GeneralSetCommandType.DateFormat:
+                    SendFeedBack(8, SetCommand);
+                    break;
+            }
+
+        }
+        void ProcessSetStatement(SetCommandStatement Fragment)
+        {
+            foreach (GeneralSetCommand SetCommand in Fragment.Commands)
+            {
+                ProcessGeneralSetCommand(SetCommand);
+
+            }
+        }
+
+        void ProcessSetTransactionIolationLevelStatement(SetTransactionIsolationLevelStatement Statement)
+        {
+            switch (Statement.Level)
+            {
+                case IsolationLevel.ReadUncommitted:
+                    SendFeedBack(10, Statement);
+                    break;
+            }
+
+        }
+
+        void ProcessInsertStatement(InsertStatement Fragment)
+        {
+            if (Fragment.InsertSpecification.Columns.Count == 0)
+            {
+                SendFeedBack(12, Fragment);
+
+            }
+
+            switch (GetType(Fragment.InsertSpecification.InsertSource))
+            {
+                case "SelectInsertSource":
+                    SelectInsertSource InsSource = (SelectInsertSource)Fragment.InsertSpecification.InsertSource;
+                    WithCtesAndXmlNamespaces  Cte = Fragment.WithCtesAndXmlNamespaces;
+                    ProcessQueryExpression(InsSource.Select, "RG", false, Cte);
+                    if(Cte!=null)
+                        ProcessWithCtesAndXmlNamespaces(Cte);
+                    break;
+                case "ExecuteInsertSource":
+                    ExecuteInsertSource ExecSource = (ExecuteInsertSource)Fragment.InsertSpecification.InsertSource;
+                    //ProcessExecuteSpecification(ExecSource.Execute);
+                    ExecutableEntity ExecutableEntity = ExecSource.Execute.ExecutableEntity;
+                    ProcessExecutableEntity(ExecutableEntity);
+                    break;
+
+            }
+
+        }
+
+        void ProcessPredicateSetStatement(PredicateSetStatement Fragment)
+        {
+            switch (Fragment.Options)
+            {
+                case SetOptions.AnsiNulls:
+                    if (!Fragment.IsOn) SendFeedBack(14, Fragment);
+                    return;
+                case SetOptions.AnsiPadding:
+                    if (!Fragment.IsOn) SendFeedBack(15, Fragment);
+                    return;
+                case SetOptions.AnsiWarnings:
+                    if (!Fragment.IsOn) SendFeedBack(16, Fragment);
+                    return;
+                case SetOptions.ArithAbort:
+                    if (!Fragment.IsOn) SendFeedBack(17, Fragment);
+                    return;
+                case SetOptions.NumericRoundAbort:
+                    if (Fragment.IsOn) SendFeedBack(18, Fragment);
+                    return;
+                case SetOptions.QuotedIdentifier:
+                    if (!Fragment.IsOn) SendFeedBack(19, Fragment);
+                    return;
+                case SetOptions.ForcePlan:
+                    if (Fragment.IsOn) SendFeedBack(20, Fragment);
+                    return;
+                case SetOptions.ConcatNullYieldsNull:
+                    if (!Fragment.IsOn) SendFeedBack(13, Fragment);
+                    return;
+                case SetOptions.NoCount:
+                    if (Fragment.IsOn) NoCountSet = true;
+                    return;
+            }
+
+        }
+
+        bool TestVariableAssigmentChain(string VarName)
+        {
+            foreach(ProcedureParameter Param in ParameterList){
+                if (Param.VariableName.Value.Equals(VarName,StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+
+                }
+
+            }
+            foreach(VarAssignment VarOn in AssignmentList){
+                if (VarOn.VarName.Equals(VarName,StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TestVariableAssigmentChain(VarOn.SrcName))
+                    {
+
+                        return true;
+                    }
+
+                }
+
+            }
+            return false;
+
+        }
+       bool InjectionTesting(ExecutableStringList StringList)
+        {
+
+            foreach (TSqlFragment Fragment in StringList.Strings)
+            {
+                switch (GetType(Fragment))
+                {
+                    case "VariableReference":
+                        VariableReference varRef = (VariableReference)Fragment;
+                        if (TestVariableAssigmentChain(varRef.Name))
+                        {
+                            return true;
+                        }
+                        
+                        break;
+                }
+            }
+            return false;
+            
+        }
+
+       void ProcessExecutableEntity(ExecutableEntity ExecutableEntity)
+       {
+           switch (GetType(ExecutableEntity))
+           {
+               case "ExecutableProcedureReference":
+                   ExecutableProcedureReference ProcReference = (ExecutableProcedureReference)ExecutableEntity;
+                   if (ProcReference.ProcedureReference.ProcedureReference.Name.SchemaIdentifier == null &&
+                       !ProcReference.ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value.StartsWith("sp_", StringComparison.OrdinalIgnoreCase))
+                   {
+                       SendFeedBack(21, ExecutableEntity);
+                   }
+                   if (ProcReference.ProcedureReference.ProcedureReference.Name.BaseIdentifier.Value.Equals("sp_executesql", StringComparison.OrdinalIgnoreCase))
+                   {
+                       foreach (ExecuteParameter Param in ExecutableEntity.Parameters)
+                       {
+                           if (Param.Variable.Name.Equals("@stmt", StringComparison.OrdinalIgnoreCase))
+                           {
+                               if (GetType(Param.ParameterValue) == "VariableReference")
+                               {
+                                   VariableReference var = (VariableReference)Param.ParameterValue;
+                                   if (TestVariableAssigmentChain(var.Name))
+                                   {
+                                       SendFeedBack(43, ExecutableEntity);
+
+                                   }
+
+
+                               }
+
+                           }
+
+                       }
+
+                   }
+                   break;
+               case "ExecutableStringList":
+                   ExecutableStringList StringList = (ExecutableStringList)ExecutableEntity;
+                   if (InjectionTesting(StringList))
+                   {
+                       SendFeedBack(43, ExecutableEntity);
+                   }
+                   break;
+
+           }
+
+
+       }
+        void ProcessExecuteStatement(ExecuteStatement Fragment)
+        {
+            ExecutableEntity ExecutableEntity = Fragment.ExecuteSpecification.ExecutableEntity;
+            ProcessExecutableEntity(ExecutableEntity);
+        }
+
+        void ProcessCursorStatement(DeclareCursorStatement CursorStatement)
+        {
+            if (CursorStatement.CursorDefinition == null || CursorStatement.CursorDefinition.Options.Count == 0)
+            {
+                SendFeedBack(29, CursorStatement);
+
+            }
+        }
+
+        void ProcessBeginEndBlockStatement(BeginEndBlockStatement BEStatement)
+        {
+            foreach (TSqlStatement Statement in BEStatement.StatementList.Statements)
+            {
+                ProcessTsqlFragment(Statement);
+            }
+
+        }
+
+        void ProcessWhileStatement(WhileStatement WhileStatement)
+        {
+            ProcessTsqlFragment(WhileStatement.Predicate);
+            ProcessTsqlFragment(WhileStatement.Statement);
+
+        }
+
+        void ProcessScalarFunctionReturnType(ScalarFunctionReturnType ReturnType)
+        {
+
+
+        }
+        void ProcessSelectFunctionReturnType(SelectFunctionReturnType ReturnType)
+        {
+            ProcessTsqlFragment(ReturnType.SelectStatement);
+        }
+
+        void ProcessFunctionStatementBody(FunctionStatementBody Function)
+        {
+            if (Function.Name.SchemaIdentifier == null) SendFeedBack(24, Function.Name);
+
+            ProcessTsqlFragment(Function.ReturnType);
+
+            if (Function.StatementList != null)
+            {
+                foreach (TSqlFragment Statement in Function.StatementList.Statements)
+                {
+                    ProcessTsqlFragment(Statement);
+
+                }
+            }
+
+        }
+
+        
+
+        void ProcessProcedureStatementBody(ProcedureStatementBody StatementBody)
+        {
+
+            AssignmentList.Clear();
+
+            TestProcedureReference(StatementBody.ProcedureReference);
+            ParameterList = StatementBody.Parameters;
+
+            NoCountSet = false;
+            if (StatementBody.StatementList != null)
+            {
+                foreach (TSqlFragment Fragment in StatementBody.StatementList.Statements)
+                {
+                    ProcessTsqlFragment(Fragment);
+                }
+                if (!NoCountSet) SendFeedBack(30, StatementBody.ProcedureReference);
+            }
+            ParameterList = null;
+
+        }
+
+        void ProcessIfStatement(IfStatement IfStatement)
+        {
+
+            ProcessTsqlFragment(IfStatement.Predicate);
+            ProcessTsqlFragment(IfStatement.ThenStatement);
+            if (IfStatement.ElseStatement != null) ProcessTsqlFragment(IfStatement.ElseStatement);
+        }
+
+
+        void ProcessDeclareVariableElement(DeclareVariableElement Element)
+        {
+            if (Element.VariableName.Value.Length <= 2)
+            {
+                SendFeedBack(33, Element);
+            }
+            ProcessTsqlFragment(Element.DataType);
+            if (Element.Value != null) ProcessTsqlFragment(Element.Value);
+
+        }
+        void ProcessDeclareVariableStatement(DeclareVariableStatement Statement)
+        {
+            foreach (DeclareVariableElement variable in Statement.Declarations)
+            {
+                ProcessTsqlFragment(variable);
+            }
+
+        }
+
+        void ProcessSqlDataTypeReference(SqlDataTypeReference DataType)
+        {
+            if (DataType.SqlDataTypeOption == SqlDataTypeOption.Table)
+            {
+
+
+            }
+
+            switch (DataType.SqlDataTypeOption)
+            {
+                case SqlDataTypeOption.Table:
+                    break;
+                case SqlDataTypeOption.Text:
+                case SqlDataTypeOption.NText:
+                case SqlDataTypeOption.Image:
+                    SendFeedBack(36, DataType);
+                    break;
+
+            }
+
+
+        }
+
+        void ProcessTableVariableStatement(DeclareTableVariableStatement Fragment)
+        {
+            if (Fragment.Body.VariableName.Value.Length <= 2)
+            {
+                SendFeedBack(33, Fragment);
+
+            }
+        }
+
+        void ProcessTableValuedFunctionReturnType(TableValuedFunctionReturnType Fragment)
+        {
+            ProcessTsqlFragment(Fragment.DeclareTableVariableBody);
+
+        }
+
+        void ProcessTableVariableBody(DeclareTableVariableBody Fragment)
+        {
+            if (Fragment.VariableName.Value.Length <= 2)
+            {
+                SendFeedBack(33, Fragment);
+
+            }
+        }
+
+        void ProcessReturnStatement(ReturnStatement ReturnStatement)
+        {
+            if (ReturnStatement.Expression != null) ProcessTsqlFragment(ReturnStatement.Expression);
+        }
+
+
+        void ProcessExistsPredicate(ExistsPredicate ExistsPredicate)
+        {
+            ProcessTsqlFragment(ExistsPredicate.Subquery);
+        }
+
+
+        void ProcessTsqlFragment(TSqlFragment Fragment)
+        {
+            String StmtType = GetType(Fragment);
+            //Console.WriteLine(StmtType);
+            switch (StmtType)
+            {
+                case "DeclareCursorStatement":
+                    ProcessCursorStatement((DeclareCursorStatement)Fragment);
+                    break;
+                case "BeginEndBlockStatement":
+                    ProcessBeginEndBlockStatement((BeginEndBlockStatement)Fragment);
+                    break;
+                case "CreateFunctionStatement":
+                case "AlterFunctionStatement":
+                    ProcessFunctionStatementBody((FunctionStatementBody)Fragment);
+                    break;
+                case "SelectFunctionReturnType":
+                    ProcessSelectFunctionReturnType((SelectFunctionReturnType)Fragment);
+                    return;
+                case "ScalarFunctionReturnType":
+                    ProcessScalarFunctionReturnType((ScalarFunctionReturnType)Fragment);
+                    break;
+                case "SetTransactionIsolationLevelStatement":
+                    ProcessSetTransactionIolationLevelStatement((SetTransactionIsolationLevelStatement)Fragment);
+                    break;
+                case "WhileStatement":
+                    ProcessWhileStatement((WhileStatement)Fragment);
+                    break;
+                case "InsertStatement":
+                    ProcessInsertStatement((InsertStatement)Fragment);
+                    break;
+                case "SelectStatement":
+                    ProcessSelectStatement((SelectStatement)Fragment, "RG", true);
+                    break;
+                case "SetRowCountStatement":
+                    SendFeedBack(42, Fragment);
+                    break;
+                case "IfStatement":
+                    ProcessIfStatement((IfStatement)Fragment);
+                    break;
+                case "PredicateSetStatement":
+                    ProcessPredicateSetStatement((PredicateSetStatement)Fragment);
+                    break;
+                case "ExecuteStatement":
+                    ProcessExecuteStatement((ExecuteStatement)Fragment);
+                    break;
+                case "SetIdentityInsertStatement":
+                    SendFeedBack(22, Fragment);
+                    break;
+                case "SetCommandStatement":
+                    ProcessSetStatement((SetCommandStatement)Fragment);
+                    break;
+
+                case "CreateTableStatement":
+                    ProcessCreateTable((CreateTableStatement)Fragment);
+                    break;
+
+                case "CreateProcedureStatement":
+                case "AlterProcedureStatement":
+                    ProcessProcedureStatementBody((ProcedureStatementBody)Fragment);
+                    AssignmentList.Clear();
+                    break;
+                case "CreateViewStatement":
+                case "AlterViewStatement":
+                    ProcessViewStatementBody((ViewStatementBody)Fragment);
+                    break;
+                case "TSqlBatch":
+                    TSqlBatch Batch = (TSqlBatch)Fragment;
+                    foreach (TSqlFragment InnerFragment in Batch.Statements)
+                    {
+                        ProcessTsqlFragment(InnerFragment);
+                    }
+                    break;
+                case "TSqlScript":
+                    TSqlScript Script = (TSqlScript)Fragment;
+                    foreach (TSqlBatch InnerBatch in Script.Batches)
+                    {
+                        ProcessTsqlFragment(InnerBatch);
+                    }
+                    break;
+                case "BooleanParenthesisExpression":
+                    BooleanParenthesisExpression Expression = (BooleanParenthesisExpression)Fragment;
+                    ProcessTsqlFragment(Expression.Expression);
+                    break;
+                case "BooleanComparisonExpression":
+                    BooleanComparisonExpression BCExpression = (BooleanComparisonExpression)Fragment;
+                    ProcessTsqlFragment(BCExpression.FirstExpression);
+                    ProcessTsqlFragment(BCExpression.SecondExpression);
+                    break;
+                case "ScalarSubquery":
+                    ScalarSubquery ScalarSubquery = (ScalarSubquery)Fragment;
+                    ProcessQueryExpression(ScalarSubquery.QueryExpression, "RG");
+                    break;
+                case "ReturnStatement":
+                    ProcessReturnStatement((ReturnStatement)Fragment);
+                    break;
+                case "IntegerLiteral":
+                    break;
+                case "DeclareVariableStatement":
+                    ProcessDeclareVariableStatement((DeclareVariableStatement)Fragment);
+                    break;
+                case "DeclareVariableElement":
+                    ProcessDeclareVariableElement((DeclareVariableElement)Fragment);
+                    break;
+                case "PrintStatement":
+                    break;
+                case "SqlDataTypeReference":
+                    ProcessSqlDataTypeReference((SqlDataTypeReference)Fragment);
+                    break;
+                case "DeclareTableVariableStatement":
+                    ProcessTableVariableStatement((DeclareTableVariableStatement)Fragment);
+                    break;
+                case "TableValuedFunctionReturnType":
+                    ProcessTableValuedFunctionReturnType((TableValuedFunctionReturnType)Fragment);
+                    break;
+                case "DeclareTableVariableBody":
+                    ProcessTableVariableBody((DeclareTableVariableBody)Fragment);
+                    break;
+                case "VariableReference":
+                    //ProcessVariableReference((VariableReference)Fragment);
+                    break;
+                case "ExistsPredicate":
+                    ProcessExistsPredicate((ExistsPredicate)Fragment);
+                    break;
+                default:
+                    break;
+            }
+
+        }
+    
+        
+
+       
+        public List<SqlRuleProblem> ProcessObject(TSqlObject SqlObject,int iRule)
+        {
+            List<SqlRuleProblem> problems = new List<SqlRuleProblem>();
+            _problems = problems;
+            _modelElement = SqlObject;
+            _iRule = iRule;
+
+            TSqlFragment frg;
+            if(Microsoft.SqlServer.Dac.TSqlModelUtils.TryGetFragmentForAnalysis(SqlObject,out frg)){
+                if (iRule == 23)
+                {
+                    foreach (TSqlParserToken ParserToken in frg.ScriptTokenStream)
+                    {
+                        //if (ParserToken.TokenType == TSqlTokenType.SingleLineComment) SendFeedBack(23, ParserToken.);
+                        // :TODO 
+                    }
+                }
+                ProcessTsqlFragment(frg);
+            }
+
+            return problems;
+
+        }
+        
+     }
+}
+=======
+﻿using System;
+using System.Collections.Generic;
+using System.Resources;
+using Microsoft.SqlServer.Dac;
+using Microsoft.SqlServer.Dac.CodeAnalysis;
+using Microsoft.SqlServer.Dac.Model;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
+
+namespace TSQLSmellSCA
+{
+    internal class VarAssignment
+    {
+        public string SrcName;
+        public string VarName;
+    }
+
+    public class Smells
+    {
+        private readonly List<VarAssignment> AssignmentList = new List<VarAssignment>();
+        public bool NoCountSet = false;
+        private IList<ProcedureParameter> ParameterList;
+
+        private int _iRule;
+        private TSqlObject _modelElement;
+        private List<SqlRuleProblem> _problems;
+        private readonly SelectStatementProcessor _selectStatementProcessor;
+        private readonly InsertProcessor _insertProcessor;
+        private readonly ExecutableEntityProcessor _executableEntityProcessor;
+        private readonly FromProcessor _fromProcessor;
+        private readonly WhereProcessor _whereProcessor;
+        private readonly OrderByProcessor _orderByProcessor;
+        private readonly WhileProcessor _whileProcessor;
+        private readonly PredicateSetProcessor _predicateSetProcessor;
+        private readonly SetProcessor _setProcessor;
+
+        public Smells()
+        {
+            _selectStatementProcessor = new SelectStatementProcessor(this);
+            _insertProcessor = new InsertProcessor(this);
+            _executableEntityProcessor = new ExecutableEntityProcessor(this);
+            _fromProcessor = new FromProcessor(this);
+            _whereProcessor = new WhereProcessor(this);
+            _orderByProcessor = new OrderByProcessor(this);
+            _whileProcessor = new WhileProcessor(this);
+            _predicateSetProcessor = new PredicateSetProcessor(this);
+            _setProcessor = new SetProcessor(this);
+        }
+
+        public InsertProcessor InsertProcessor
+        {
+            get { return _insertProcessor; }
+        }
+
+        public ExecutableEntityProcessor ExecutableEntityProcessor
+        {
+            get { return _executableEntityProcessor; }
+        }
+
+
+        public void SendFeedBack(int ErrorNum, TSqlFragment ErrorFrg)
+        {
+            if (ErrorNum != _iRule) return;
+
+
+            ResourceManager rm = Resources.ResourceManager;
+
+            string Lookup = "TSQLSmell_RuleName" + ErrorNum.ToString("D2");
+            string Out = rm.GetString(Lookup);
+
+            _problems.Add(new SqlRuleProblem(Out, _modelElement, ErrorFrg));
+        }
+
+        private void SendFeedBack(int ErrorNum, TSqlParserToken ErrorToken)
+        {
+            Console.WriteLine(ErrorNum.ToString());
+            // TODO : For future, may need offset from following token
+        }
+
+
+        private void ProcessCreateTable(CreateTableStatement TblStmt)
+        {
+            if (TblStmt.SchemaObjectName.SchemaIdentifier == null &&
+                !TblStmt.SchemaObjectName.BaseIdentifier.Value.StartsWith("#") &&
+                !TblStmt.SchemaObjectName.BaseIdentifier.Value.StartsWith("@")
+                )
+            {
+                SendFeedBack(27, TblStmt);
+            }
+        }
+
+        private void TestProcedureReference(ProcedureReference PrcRef)
+        {
+            if (PrcRef.Name.SchemaIdentifier == null)
+            {
+                SendFeedBack(24, PrcRef);
+            }
+        }
+
+        private void TestViewReference(SchemaObjectName ObjectName)
+        {
+            if (ObjectName.SchemaIdentifier == null)
+            {
+                SendFeedBack(24, ObjectName);
+            }
+        }
+
+        public void ProcessFunctionCall(FunctionCall FunctionCall)
+        {
+            if (FunctionCall.OverClause != null)
+            {
+                if (FunctionCall.OverClause.WindowFrameClause != null)
+                {
+                    if (FunctionCall.OverClause.WindowFrameClause.WindowFrameType == WindowFrameType.Range)
+                    {
+                        SendFeedBack(25, FunctionCall.OverClause.WindowFrameClause);
+                    }
+                }
+                else
+                {
+                    if (FunctionCall.OverClause.OrderByClause != null)
+                    {
+                        switch (FunctionCall.FunctionName.Value.ToLower())
+                        {
+                            case "row_number":
+                            case "rank":
+                            case "dense_rank":
+                            case "ntile":
+                            case "lag":
+                            case "lead":
+                                break;
+                            default:
+                                SendFeedBack(26, FunctionCall.OverClause);
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void ProcessVariableReference(VariableReference VarRef, string VarName)
+        {
+            var VarAssignment = new VarAssignment();
+            VarAssignment.SrcName = VarRef.Name;
+            VarAssignment.VarName = VarName;
+            AssignmentList.Add(VarAssignment);
+        }
+
+        private void ProcessSelectSetFragment(TSqlFragment Expression, string VarName)
+        {
+            string ElemType = FragmentTypeParser.GetFragmentType(Expression);
+            switch (ElemType)
+            {
+                case "BinaryExpression":
+                    var BinaryExpression = (BinaryExpression) Expression;
+                    ProcessSelectSetFragment(BinaryExpression.FirstExpression, VarName);
+                    ProcessSelectSetFragment(BinaryExpression.SecondExpression, VarName);
+                    break;
+                case "VariableReference":
+                    ProcessVariableReference((VariableReference) Expression, VarName);
+                    break;
+                case "FunctionCall":
+                    var Func = (FunctionCall) Expression;
+                    foreach (TSqlFragment Parameter in Func.Parameters)
+                    {
+                        ProcessSelectSetFragment(Parameter, VarName);
+                    }
+                    break;
+                case "CastCall":
+                    var Cast = (CastCall) Expression;
+                    if (FragmentTypeParser.GetFragmentType(Cast.Parameter) == "VariableReference")
+                    {
+                        ProcessVariableReference((VariableReference) Cast.Parameter, VarName);
+                    }
+                    break;
+                case "StringLiteral":
+                    break;
+            }
+        }
+
+        public void ProcessSelectSetVariable(SelectSetVariable SelectElement)
+        {
+            string VarName = SelectElement.Variable.Name;
+            ScalarExpression Expression = SelectElement.Expression;
+            ProcessSelectSetFragment(Expression, VarName);
+        }
+
+        public void ProcessQueryExpression(QueryExpression QueryExpression, string ParentType, bool TestTop = false,
+            WithCtesAndXmlNamespaces Cte = null)
+        {
+            string ExpressionType = FragmentTypeParser.GetFragmentType(QueryExpression);
+            switch (ExpressionType)
+            {
+                case "QuerySpecification":
+                    //{$Query = $Stmt.QueryExpression;
+                    var QuerySpec = (QuerySpecification) QueryExpression;
+                    _selectStatementProcessor.ProcessSelectElements(QuerySpec.SelectElements, ParentType, Cte);
+                    if (QuerySpec.FromClause != null) _fromProcessor.Process(QuerySpec.FromClause, Cte);
+                    if (QuerySpec.WhereClause != null) _whereProcessor.Process(QuerySpec.WhereClause);
+                    if (QuerySpec.OrderByClause != null)
+                    {
+                        _orderByProcessor.Process(QuerySpec.OrderByClause);
+                        if (ParentType == "VW")
+                        {
+                            SendFeedBack(28, QuerySpec.OrderByClause);
+                        }
+                    }
+                    if (QuerySpec.TopRowFilter != null) ProcessTopFilter(QuerySpec.TopRowFilter);
+
+                    break;
+                case "QueryParenthesisExpression":
+                    //{$Query=$Stmt.QueryExpression.QueryExpression;break}
+                    var Expression = (QueryParenthesisExpression) QueryExpression;
+                    ProcessQueryExpression(Expression.QueryExpression, "RG", TestTop, Cte);
+
+                    break;
+                case "BinaryQueryExpression":
+                    var BinaryQueryExpression = (BinaryQueryExpression) QueryExpression;
+                    ProcessQueryExpression(BinaryQueryExpression.FirstQueryExpression, ParentType, TestTop, Cte);
+                    ProcessQueryExpression(BinaryQueryExpression.SecondQueryExpression, ParentType, TestTop, Cte);
+                    //BinaryQueryExpression.
+
+                    //{Process-BinaryQueryExpression $Stmt.QueryExpression;break;}
+                    break;
+            }
+        }
+
+        private void ProcessTopFilter(TopRowFilter TopFilter)
+        {
+            IntegerLiteral TopLiteral = null;
+            if (FragmentTypeParser.GetFragmentType(TopFilter.Expression) != "ParenthesisExpression")
+            {
+                SendFeedBack(34, TopFilter);
+                if (FragmentTypeParser.GetFragmentType(TopFilter.Expression) == "IntegerLiteral")
+                {
+                    TopLiteral = (IntegerLiteral) TopFilter.Expression;
+                }
+            }
+            else
+            {
+                var ParenthesisExpression = (ParenthesisExpression) TopFilter.Expression;
+                if (FragmentTypeParser.GetFragmentType(ParenthesisExpression.Expression) == "IntegerLiteral")
+                {
+                    TopLiteral = (IntegerLiteral) ParenthesisExpression.Expression;
+                }
+            }
+            if (TopFilter.Percent && TopLiteral != null && TopLiteral.Value == "100")
+            {
+                SendFeedBack(35, TopLiteral);
+            }
+        }
+
+
+        //void ProcessSelectElements(
+
+        private void ProcessViewStatementBody(ViewStatementBody StatementBody)
+        {
+            TestViewReference(StatementBody.SchemaObjectName);
+            _selectStatementProcessor.Process(StatementBody.SelectStatement, "VW", true);
+        }
+
+        private void ProcessSetTransactionIolationLevelStatement(SetTransactionIsolationLevelStatement Statement)
+        {
+            switch (Statement.Level)
+            {
+                case IsolationLevel.ReadUncommitted:
+                    SendFeedBack(10, Statement);
+                    break;
+            }
+        }
+
+        public bool TestVariableAssigmentChain(string VarName)
+        {
+            foreach (ProcedureParameter Param in ParameterList)
+            {
+                if (Param.VariableName.Value.Equals(VarName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            foreach (VarAssignment VarOn in AssignmentList)
+            {
+                if (VarOn.VarName.Equals(VarName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TestVariableAssigmentChain(VarOn.SrcName))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private void ProcessCursorStatement(DeclareCursorStatement CursorStatement)
+        {
+            if (CursorStatement.CursorDefinition == null || CursorStatement.CursorDefinition.Options.Count == 0)
+            {
+                SendFeedBack(29, CursorStatement);
+            }
+        }
+
+        private void ProcessBeginEndBlockStatement(BeginEndBlockStatement BEStatement)
+        {
+            foreach (TSqlStatement Statement in BEStatement.StatementList.Statements)
+            {
+                ProcessTsqlFragment(Statement);
+            }
+        }
+
+        private void ProcessScalarFunctionReturnType(ScalarFunctionReturnType ReturnType)
+        {
+        }
+
+        private void ProcessSelectFunctionReturnType(SelectFunctionReturnType ReturnType)
+        {
+            ProcessTsqlFragment(ReturnType.SelectStatement);
+        }
+
+        private void ProcessFunctionStatementBody(FunctionStatementBody Function)
+        {
+            if (Function.Name.SchemaIdentifier == null) SendFeedBack(24, Function.Name);
+
+            ProcessTsqlFragment(Function.ReturnType);
+
+            if (Function.StatementList != null)
+            {
+                foreach (TSqlFragment Statement in Function.StatementList.Statements)
+                {
+                    ProcessTsqlFragment(Statement);
+                }
+            }
+        }
+
+
+        private void ProcessProcedureStatementBody(ProcedureStatementBody StatementBody)
+        {
+            AssignmentList.Clear();
+
+            TestProcedureReference(StatementBody.ProcedureReference);
+            ParameterList = StatementBody.Parameters;
+
+            NoCountSet = false;
+            if (StatementBody.StatementList != null)
+            {
+                foreach (TSqlFragment Fragment in StatementBody.StatementList.Statements)
+                {
+                    ProcessTsqlFragment(Fragment);
+                }
+                if (!NoCountSet) SendFeedBack(30, StatementBody.ProcedureReference);
+            }
+            ParameterList = null;
+        }
+
+        private void ProcessIfStatement(IfStatement IfStatement)
+        {
+            ProcessTsqlFragment(IfStatement.Predicate);
+            ProcessTsqlFragment(IfStatement.ThenStatement);
+            if (IfStatement.ElseStatement != null) ProcessTsqlFragment(IfStatement.ElseStatement);
+        }
+
+
+        private void ProcessDeclareVariableElement(DeclareVariableElement Element)
+        {
+            if (Element.VariableName.Value.Length <= 2)
+            {
+                SendFeedBack(33, Element);
+            }
+            ProcessTsqlFragment(Element.DataType);
+            if (Element.Value != null) ProcessTsqlFragment(Element.Value);
+        }
+
+        private void ProcessDeclareVariableStatement(DeclareVariableStatement Statement)
+        {
+            foreach (DeclareVariableElement variable in Statement.Declarations)
+            {
+                ProcessTsqlFragment(variable);
+            }
+        }
+
+        private void ProcessSqlDataTypeReference(SqlDataTypeReference DataType)
+        {
+            if (DataType.SqlDataTypeOption == SqlDataTypeOption.Table)
+            {
+            }
+
+            switch (DataType.SqlDataTypeOption)
+            {
+                case SqlDataTypeOption.Table:
+                    break;
+                case SqlDataTypeOption.Text:
+                case SqlDataTypeOption.NText:
+                case SqlDataTypeOption.Image:
+                    SendFeedBack(36, DataType);
+                    break;
+            }
+        }
+
+        private void ProcessTableVariableStatement(DeclareTableVariableStatement Fragment)
+        {
+            if (Fragment.Body.VariableName.Value.Length <= 2)
+            {
+                SendFeedBack(33, Fragment);
+            }
+        }
+
+        private void ProcessTableValuedFunctionReturnType(TableValuedFunctionReturnType Fragment)
+        {
+            ProcessTsqlFragment(Fragment.DeclareTableVariableBody);
+        }
+
+        private void ProcessTableVariableBody(DeclareTableVariableBody Fragment)
+        {
+            if (Fragment.VariableName.Value.Length <= 2)
+            {
+                SendFeedBack(33, Fragment);
+            }
+        }
+
+        private void ProcessReturnStatement(ReturnStatement ReturnStatement)
+        {
+            if (ReturnStatement.Expression != null) ProcessTsqlFragment(ReturnStatement.Expression);
+        }
+
+
+        private void ProcessExistsPredicate(ExistsPredicate ExistsPredicate)
+        {
+            ProcessTsqlFragment(ExistsPredicate.Subquery);
+        }
+
+
+        public void ProcessTsqlFragment(TSqlFragment Fragment)
+        {
+            String StmtType = FragmentTypeParser.GetFragmentType(Fragment);
+            //Console.WriteLine(StmtType);
+            switch (StmtType)
+            {
+                case "DeclareCursorStatement":
+                    ProcessCursorStatement((DeclareCursorStatement) Fragment);
+                    break;
+                case "BeginEndBlockStatement":
+                    ProcessBeginEndBlockStatement((BeginEndBlockStatement) Fragment);
+                    break;
+                case "CreateFunctionStatement":
+                case "AlterFunctionStatement":
+                    ProcessFunctionStatementBody((FunctionStatementBody) Fragment);
+                    break;
+                case "SelectFunctionReturnType":
+                    ProcessSelectFunctionReturnType((SelectFunctionReturnType) Fragment);
+                    return;
+                case "ScalarFunctionReturnType":
+                    ProcessScalarFunctionReturnType((ScalarFunctionReturnType) Fragment);
+                    break;
+                case "SetTransactionIsolationLevelStatement":
+                    ProcessSetTransactionIolationLevelStatement((SetTransactionIsolationLevelStatement) Fragment);
+                    break;
+                case "WhileStatement":
+                    _whileProcessor.ProcessWhileStatement((WhileStatement) Fragment);
+                    break;
+                case "InsertStatement":
+                    InsertProcessor.Process((InsertStatement) Fragment);
+                    break;
+                case "SelectStatement":
+                    _selectStatementProcessor.Process((SelectStatement) Fragment, "RG", true);
+                    break;
+                case "SetRowCountStatement":
+                    SendFeedBack(42, Fragment);
+                    break;
+                case "IfStatement":
+                    ProcessIfStatement((IfStatement) Fragment);
+                    break;
+                case "PredicateSetStatement":
+                    _predicateSetProcessor.ProcessPredicateSetStatement((PredicateSetStatement) Fragment);
+                    break;
+                case "ExecuteStatement":
+                    ExecutableEntityProcessor.ProcessExecuteStatement((ExecuteStatement) Fragment);
+                    break;
+                case "SetIdentityInsertStatement":
+                    SendFeedBack(22, Fragment);
+                    break;
+                case "SetCommandStatement":
+                    _setProcessor.ProcessSetStatement((SetCommandStatement) Fragment);
+                    break;
+
+                case "CreateTableStatement":
+                    ProcessCreateTable((CreateTableStatement) Fragment);
+                    break;
+
+                case "CreateProcedureStatement":
+                case "AlterProcedureStatement":
+                    ProcessProcedureStatementBody((ProcedureStatementBody) Fragment);
+                    AssignmentList.Clear();
+                    break;
+                case "CreateViewStatement":
+                case "AlterViewStatement":
+                    ProcessViewStatementBody((ViewStatementBody) Fragment);
+                    break;
+                case "TSqlBatch":
+                    var Batch = (TSqlBatch) Fragment;
+                    foreach (TSqlFragment InnerFragment in Batch.Statements)
+                    {
+                        ProcessTsqlFragment(InnerFragment);
+                    }
+                    break;
+                case "TSqlScript":
+                    var Script = (TSqlScript) Fragment;
+                    foreach (TSqlBatch InnerBatch in Script.Batches)
+                    {
+                        ProcessTsqlFragment(InnerBatch);
+                    }
+                    break;
+                case "BooleanParenthesisExpression":
+                    var Expression = (BooleanParenthesisExpression) Fragment;
+                    ProcessTsqlFragment(Expression.Expression);
+                    break;
+                case "BooleanComparisonExpression":
+                    var BCExpression = (BooleanComparisonExpression) Fragment;
+                    ProcessTsqlFragment(BCExpression.FirstExpression);
+                    ProcessTsqlFragment(BCExpression.SecondExpression);
+                    break;
+                case "ScalarSubquery":
+                    var ScalarSubquery = (ScalarSubquery) Fragment;
+                    ProcessQueryExpression(ScalarSubquery.QueryExpression, "RG");
+                    break;
+                case "ReturnStatement":
+                    ProcessReturnStatement((ReturnStatement) Fragment);
+                    break;
+                case "IntegerLiteral":
+                    break;
+                case "DeclareVariableStatement":
+                    ProcessDeclareVariableStatement((DeclareVariableStatement) Fragment);
+                    break;
+                case "DeclareVariableElement":
+                    ProcessDeclareVariableElement((DeclareVariableElement) Fragment);
+                    break;
+                case "PrintStatement":
+                    break;
+                case "SqlDataTypeReference":
+                    ProcessSqlDataTypeReference((SqlDataTypeReference) Fragment);
+                    break;
+                case "DeclareTableVariableStatement":
+                    ProcessTableVariableStatement((DeclareTableVariableStatement) Fragment);
+                    break;
+                case "TableValuedFunctionReturnType":
+                    ProcessTableValuedFunctionReturnType((TableValuedFunctionReturnType) Fragment);
+                    break;
+                case "DeclareTableVariableBody":
+                    ProcessTableVariableBody((DeclareTableVariableBody) Fragment);
+                    break;
+                case "VariableReference":
+                    //ProcessVariableReference((VariableReference)Fragment);
+                    break;
+                case "ExistsPredicate":
+                    ProcessExistsPredicate((ExistsPredicate) Fragment);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+
+        public List<SqlRuleProblem> ProcessObject(TSqlObject SqlObject, int iRule)
+        {
+            var problems = new List<SqlRuleProblem>();
+            _problems = problems;
+            _modelElement = SqlObject;
+            _iRule = iRule;
+
+            TSqlFragment frg;
+            if (TSqlModelUtils.TryGetFragmentForAnalysis(SqlObject, out frg))
+            {
+                if (iRule == 23)
+                {
+                    foreach (TSqlParserToken ParserToken in frg.ScriptTokenStream)
+                    {
+                        if (ParserToken.TokenType == TSqlTokenType.SingleLineComment) SendFeedBack(23, ParserToken);
+                    }
+                }
+                ProcessTsqlFragment(frg);
+            }
+
+            return problems;
+        }
+    }
+}
+>>>>>>> 4f2a99220a653d531857eb00ac16e20a26f6c39a
