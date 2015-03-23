@@ -34,11 +34,11 @@
   <ItemGroup>
     <Reference Include="Microsoft.SqlServer.Dac">
       <HintPath>..\..\..\Program Files\Microsoft SQL Server\120\DAC\bin\Microsoft.SqlServer.Dac.dll</HintPath>
-      <Private>False</Private>
+      <Private>True</Private>
     </Reference>
     <Reference Include="Microsoft.SqlServer.Dac.Extensions">
       <HintPath>..\..\..\Program Files\Microsoft SQL Server\120\DAC\bin\Microsoft.SqlServer.Dac.Extensions.dll</HintPath>
-      <Private>False</Private>
+      <Private>True</Private>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
