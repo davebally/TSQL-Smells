@@ -21,6 +21,13 @@ namespace TSQLSmellSCA
                     var BoolComp = (BooleanComparisonExpression) BooleanExpression;
                     ProcessWhereScalarExpression(BoolComp.FirstExpression);
                     ProcessWhereScalarExpression(BoolComp.SecondExpression);
+                    if( (BoolComp.ComparisonType == BooleanComparisonType.Equals) &&
+                        (FragmentTypeParser.GetFragmentType(BoolComp.FirstExpression)=="NullLiteral" ||
+                        FragmentTypeParser.GetFragmentType(BoolComp.SecondExpression) == "NullLiteral")
+                        )
+                    {
+                        _smells.SendFeedBack(46, BoolComp);
+                    }
 
                     break;
                 case "BooleanBinaryExpression":

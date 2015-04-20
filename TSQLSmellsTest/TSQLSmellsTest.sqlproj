@@ -121,6 +121,13 @@
     <Build Include="TempTableWithNamedDefConstraint.sql" />
     <Build Include="TempTableWithNamedFK.sql" />
     <Build Include="TempTableWithNamedCheckConstraint.sql" />
+    <Build Include="DeprecatedTypes.sql" />
+    <Build Include="DeprecatedTypesSP.sql" />
+    <Build Include="DisabledForeignKey.sql" />
+    <Build Include="EqualsNull.sql" />
+    <Build Include="err.sql" />
+    <Build Include="test.sql" />
+    <Build Include="TestTokenize.sql" />
   </ItemGroup>
   <ItemGroup>
     <SqlCmdVariable Include="TestServer">

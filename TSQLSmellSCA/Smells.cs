@@ -42,6 +42,7 @@ namespace TSQLSmellSCA
         private readonly DeclareVariableProcessor _declareVariableProcessor;
         private readonly TableVariableProcessor _tableVariableProcessor;
         private readonly ReturnStatementProcessor _returnStatementProcessor;
+        private readonly ColumnDefinitionProcessor _columnDefinitionProcessor;
 
         public Smells()
         {
@@ -71,6 +72,7 @@ namespace TSQLSmellSCA
             _declareVariableProcessor = new DeclareVariableProcessor(this);
             _tableVariableProcessor = new TableVariableProcessor(this);
             _returnStatementProcessor = new ReturnStatementProcessor(this);
+            _columnDefinitionProcessor = new ColumnDefinitionProcessor(this);
         }
 
         public InsertProcessor InsertProcessor
@@ -291,6 +293,10 @@ namespace TSQLSmellSCA
                     break;
                 case "ExistsPredicate":
                     _tableVariableProcessor.ProcessExistsPredicate((ExistsPredicate) fragment);
+                    break;
+
+                case "ColumnDefinition":
+                    _columnDefinitionProcessor.ProcessColumnDefinition((ColumnDefinition)fragment);
                     break;
             }
         }

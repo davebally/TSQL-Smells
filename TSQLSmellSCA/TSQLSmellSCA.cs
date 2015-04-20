@@ -990,9 +990,48 @@ namespace TSQLSmellSCA
         }
 
     }
-    
 
 
+    [LocalizedExportCodeAnalysisRule(TSQLSmellSCA46.RuleId,
+RuleConstants.ResourceBaseName, // Name of the resource file to look up displayname and description in
+RuleConstants.TSQLSmell_RuleName46, // ID used to look up the display name inside the resources file
+null,
+        // ID used to look up the description inside the resources file
+Category = RuleConstants.CategorySmells,
+RuleScope = SqlRuleScope.Model)] // This rule targets the whole model
+    public sealed class TSQLSmellSCA46 : SqlCodeAnalysisRule
+    {
+
+        public const string RuleId = "Smells.SML046";
+
+        public override IList<SqlRuleProblem> Analyze(SqlRuleExecutionContext context)
+        {
+            TSQLSmellWorker Worker = new TSQLSmellWorker(context, RuleId);
+            return (Worker.Analyze());
+        }
+
+    }
+
+
+    [LocalizedExportCodeAnalysisRule(TSQLSmellSCA47.RuleId,
+RuleConstants.ResourceBaseName, // Name of the resource file to look up displayname and description in
+RuleConstants.TSQLSmell_RuleName47, // ID used to look up the display name inside the resources file
+null,
+        // ID used to look up the description inside the resources file
+Category = RuleConstants.CategorySmells,
+RuleScope = SqlRuleScope.Model)] // This rule targets the whole model
+    public sealed class TSQLSmellSCA47 : SqlCodeAnalysisRule
+    {
+
+        public const string RuleId = "Smells.SML047";
+
+        public override IList<SqlRuleProblem> Analyze(SqlRuleExecutionContext context)
+        {
+            TSQLSmellWorker Worker = new TSQLSmellWorker(context, RuleId);
+            return (Worker.Analyze());
+        }
+
+    }
 
 
 

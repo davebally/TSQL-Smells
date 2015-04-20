@@ -194,7 +194,28 @@ namespace TSQLSmellsSSDTTest
         }
 
     }
+    /*
+    [TestClass]
+    public class testDisabledForeignKeyConstraint : TestModel
+    {
 
+        public testDisabledForeignKeyConstraint()
+        {
+            this._TestFiles.Add("..\\..\\..\\TSQLSmellsTest\\DisabledForeignKey.sql");
+
+            this._ExpectedProblems.Add(new TestProblem(7, 7, "Smells.SML006"));
+            this._ExpectedProblems.Add(new TestProblem(8, 5, "Smells.SML006"));
+        }
+
+        [TestMethod]
+        public void DisabledForeignKeyConstraint()
+        {
+
+            RunTest();
+        }
+
+    }
+    */
     [TestClass]
     public class testConvertInt : TestModel
     {
@@ -1338,18 +1359,19 @@ namespace TSQLSmellsSSDTTest
 
 
     [TestClass]
-    public class testUnknownFileError : TestModel
+    public class testEqualsNull : TestModel
     {
 
-        public testUnknownFileError()
+        public testEqualsNull()
         {
-            this._TestFiles.Add("..\\..\\..\\TSQLSmellsTest\\ThisFileWontBeFound.sql");
+            this._TestFiles.Add("..\\..\\..\\TSQLSmellsTest\\EqualsNull.sql");
+            this._ExpectedProblems.Add(new TestProblem(13, 39, "Smells.SML046"));
 
             
         }
 
         [TestMethod]
-        public void UnknownFileError()
+        public void EqualsNull()
         {
 
             RunTest();
@@ -1357,6 +1379,47 @@ namespace TSQLSmellsSSDTTest
 
     }
 
+    [TestClass]
+    public class testDeprecatedType : TestModel
+    {
+
+        public testDeprecatedType()
+        {
+            this._TestFiles.Add("..\\..\\..\\TSQLSmellsTest\\DeprecatedTypes.sql");
+            this._ExpectedProblems.Add(new TestProblem(4, 16, "Smells.SML047"));
+
+
+        }
+
+        [TestMethod]
+        public void DeprecatedTypes()
+        {
+
+            RunTest();
+        }
+
+    }
+
+    [TestClass]
+    public class testDeprecatedTypeSP : TestModel
+    {
+
+        public testDeprecatedTypeSP()
+        {
+            this._TestFiles.Add("..\\..\\..\\TSQLSmellsTest\\DeprecatedTypesSP.sql");
+            this._ExpectedProblems.Add(new TestProblem(4, 14, "Smells.SML047"));
+            this._ExpectedProblems.Add(new TestProblem(5, 14, "Smells.SML047"));
+
+        }
+
+        [TestMethod]
+        public void DeprecatedTypesSP()
+        {
+
+            RunTest();
+        }
+
+    }
     
 
     

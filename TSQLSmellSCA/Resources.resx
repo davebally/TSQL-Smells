@@ -259,10 +259,10 @@
     <value>Dont override the optimizer ( Index Hint)</value>
   </data>
   <data name="TSQLSmell_RuleName46" xml:space="preserve">
-    <value>TSQLSmell_RuleName46</value>
+    <value>"= Null" Comparison</value>
   </data>
   <data name="TSQLSmell_RuleName47" xml:space="preserve">
-    <value>TSQLSmell_RuleName47</value>
+    <value>Use of deprecated data type</value>
   </data>
   <data name="TSQLSmell_RuleName48" xml:space="preserve">
     <value>TSQLSmell_RuleName48</value>

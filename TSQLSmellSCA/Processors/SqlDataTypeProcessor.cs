@@ -24,7 +24,7 @@ namespace TSQLSmellSCA
                 case SqlDataTypeOption.Text:
                 case SqlDataTypeOption.NText:
                 case SqlDataTypeOption.Image:
-                    _smells.SendFeedBack(36, DataType);
+                    _smells.SendFeedBack(47, DataType);
                     break;
             }
         }
