@@ -35,3 +35,5 @@ There are presently 43 rules covering:
 Whitelisting of objects is supported with extended properties.  Add to you project a script which sets the name of WhiteList against an object to be ignored.  For example :
 
 EXEC sys.sp_addextendedproperty @name=N’WhiteList’, @value=N’Ignore’ , @level0type=N’SCHEMA’,@level0name=N’dbo’, @level1type=N’PROCEDURE’,@level1name=N’WhiteListTestProc’
+
+Further install instructions can be found on my blog here : http://dataidol.com/davebally/2015/03/23/getting-out-of-the-ground-with-tsql-smells/
