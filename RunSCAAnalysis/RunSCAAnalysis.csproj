@@ -53,6 +53,12 @@
   <ItemGroup>
     <None Include="App.config" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TSQLSmellSCA\TSQLSmellSCA.csproj">
+      <Project>{0e07f4cd-6cdb-4b3a-b8d5-f88b3b26e58c}</Project>
+      <Name>TSQLSmellSCA</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.
