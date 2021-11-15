@@ -250,6 +250,19 @@ namespace TSQLSmellSCA
                         ProcessTsqlFragment(innerBatch);
                     }
                     break;
+                case "TryCatchStatement":
+                    var trycatch = (TryCatchStatement)fragment;
+
+                    foreach (TSqlStatement innerStmt in trycatch.TryStatements.Statements)
+                    {
+                        ProcessTsqlFragment(innerStmt);
+                    }
+
+                    foreach (TSqlStatement innerStmt in trycatch.CatchStatements.Statements)
+                    {
+                        ProcessTsqlFragment(innerStmt);
+                    }
+                    break;
                 case "BooleanParenthesisExpression":
                     var expression = (BooleanParenthesisExpression) fragment;
                     ProcessTsqlFragment(expression.Expression);
